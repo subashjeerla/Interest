@@ -1,0 +1,196 @@
+
+    
+  
+
+    model.summary()
+
+    history = model.fit(
+        X_train, y_train,
+        validation_data=(X_val, y_val),
+        epochs=100,
+        batch_size=32,
+        callbacks=make_callbacks(patience=10),
+        verbose=1,
+    )
+
+    test_loss, test_accuracy = model.evaluate(X_test, y_test, verbose=0)
+    print(f"\nANN test loss: {test_loss:.4f}")
+    print(f"ANN test accuracy: {test_accuracy:.4f}")
+
+    probabilities = model.predict(X_test, verbose=0)
+    report_binary_classifier(y_test, probabilities, "ANN Test Results")
+    plot_training(history, "ANN Training and Validation Loss")
+
+    # Example prediction: one held-out sample.
+    probability = float(model.predict(X_test[:1], verbose=0)[0, 0])
+    print(f"Example prediction probability for class 1: {probability:.4f}")
+    print("Predicted class:", int(probability >= 0.5))
+    print("Actual class:", int(y_test[0]))
+
+    return model, scaler, history
+
+
+# ============================================================
+# 2. CNN: Convolutional Neural Network for MNIST classification
+# ============================================================
+
+def run_cnn():
+    print("\n\n### 2. CNN: MNIST HANDWRITTEN-DIGIT CLASSIFICATION")
+
+    (X_train_all, y_train_all), (X_test, y_test) = (
+        tf.keras.datasets.mnist.load_data()
+    )
+
+    # Normalize pixel values and add the single grayscale channel.
+    X_train_all = (X_train_all.astype(np.float32) / 255.0)[..., np.newaxis]
+    X_test = (X_test.astype(np.float32) / 255.0)[..., np.newaxis]
+
+    # Use the final 10% of the official training set for validation.
+    # MNIST's training examples are shuffled with a fixed seed.
+    rng = np.random.default_rng(SEED)
+    indices = rng.permutation(len(X_train_all))
+    split_at = int(0.90 * len(indices))
+    train_idx, val_idx = indices[:split_at], indices[split_at:]
+
+    X_train, y_train = X_train_all[train_idx], y_train_all[train_idx]
+    X_val, y_val = X_train_all[val_idx], y_train_all[val_idx]
+
+    # Data augmentation is applied during training, not at test time.
+    model = tf.keras.Sequential([
+        tf.keras.layers.Input(shape=(28, 28, 1)),
+        tf.keras.layers.RandomRotation(0.05),
+        tf.keras.layers.RandomTranslation(height_factor=0.05, width_factor=0.05),
+
+        tf.keras.layers.Conv2D(
+            32, kernel_size=3, padding="same",
+            kernel_initializer="he_normal", name="conv1"
+        ),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Activation("relu"),
+        tf.keras.layers.MaxPooling2D(pool_size=2),
+        tf.keras.layers.Dropout(0.15),
+
+        tf.keras.layers.Conv2D(
+            64, kernel_size=3, padding="same",
+            kernel_initializer="he_normal", name="conv2"
+        ),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Activation("relu"),
+        tf.keras.layers.MaxPooling2D(pool_size=2),
+        tf.keras.layers.Dropout(0.20),
+
+        tf.keras.layers.Flatten(),
+        tf.keras.layers.Dense(
+            128, activation="relu",
+            kernel_initializer="he_normal",
+            kernel_regularizer=tf.keras.regularizers.l2(1e-4),
+        ),
+        tf.keras.layers.Dropout(0.30),
+        tf.keras.layers.Dense(10, activation="softmax"),
+    ])
+
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"],
+    )
+
+    model.summary()
+
+    history = model.fit(
+        X_train, y_train,
+        validation_data=(X_val, y_val),
+        epochs=10,
+        batch_size=128,
+        callbacks=make_callbacks(patience=3),
+        verbose=1,
+    )
+
+    test_loss, test_accuracy = model.evaluate(X_test, y_test, verbose=0)
+    probabilities = model.predict(X_test, batch_size=256, verbose=0)
+    y_pred = probabilities.argmax(axis=1)
+
+    print(f"\nCNN test loss: {test_loss:.4f}")
+    print(f"CNN test accuracy: {test_accuracy:.4f}")
+    print("\nClassification report:")
+    print(classification_report(y_test, y_pred, digits=4))
+
+    cm = confusion_matrix(y_test, y_pred)
+    ConfusionMatrixDisplay(
+        cm, display_labels=[str(i) for i in range(10)]
+    ).plot(cmap="Blues", xticks_rotation="vertical")
+    plt.title("CNN Test Confusion Matrix")
+    plt.tight_layout()
+    plt.show()
+
+    plot_training(history, "CNN Training and Validation Loss")
+
+    # Example prediction.
+    idx = 0
+    print("Example CNN prediction:", int(y_pred[idx]))
+    print("Actual digit:", int(y_test[idx]))
+
+    # Display an example image.
+    plt.figure(figsize=(3, 3))
+    plt.imshow(X_test[idx, :, :, 0], cmap="gray")
+    plt.title(f"Actual: {y_test[idx]}, Predicted: {y_pred[idx]}")
+    plt.axis("off")
+    plt.tight_layout()
+    plt.show()
+
+    # Visualize first convolution layer's feature maps.
+    # The model's input augmentation is bypassed for this visualization.
+    feature_model = tf.keras.Model(
+        inputs=model.input,
+        outputs=model.get_layer("conv1").output,
+    )
+    feature_maps = feature_model.predict(X_test[:1], verbose=0)[0]
+
+    fig, axes = plt.subplots(2, 4, figsize=(10, 5))
+    for i, ax in enumerate(axes.flat):
+        ax.imshow(feature_maps[:, :, i], cmap="viridis")
+        ax.set_title(f"Filter {i + 1}")
+        ax.axis("off")
+    fig.suptitle("CNN First-Layer Feature Maps")
+    plt.tight_layout()
+    plt.show()
+
+    return model, history
+
+
+# ============================================================
+# 3. RNN: SimpleRNN for time-series forecasting
+# ============================================================
+
+def make_time_series_windows(series, lookback, start_target, end_target):
+    """
+    Each sample uses the previous `lookback` values to predict series[t].
+    Target indices are in [start_target, end_target).
+    """
+    X, y = [], []
+    for t in range(start_target, end_target):
+        X.append(series[t - lookback:t])
+        y.append(series[t])
+    X = np.asarray(X, dtype=np.float32)[..., np.newaxis]
+    y = np.asarray(y, dtype=np.float32)
+    return X, y
+
+
+def run_rnn():
+    print("\n\n### 3. RNN: TIME-SERIES FORECASTING")
+
+    # Create an illustrative time series with trend, seasonality and noise.
+    # Replace this section with your own real time-series dataset for research.
+    rng = np.random.default_rng(SEED)
+    n = 5000
+    t = np.arange(n, dtype=np.float32)
+    series = (
+        0.0005 * t
+        + np.sin(2 * np.pi * t / 50)
+        + 0.4 * np.sin(2 * np.pi * t / 200)
+        + rng.normal(0, 0.15, size=n)
+    ).astype(np.float32)
+
+    lookback = 30
+    train_end = int(0.70 * n)
+
