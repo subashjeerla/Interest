@@ -1,0 +1,353 @@
+
+
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras import Sequential
+from tensorflow.keras.layers import (
+    Input, Dense, Dropout, BatchNormalization,
+    Conv2D, MaxPooling2D, AveragePooling2D,
+    Flatten, GlobalAveragePooling2D, Activation,
+    RandomRotation, RandomTranslation
+)
+from tensorflow.keras.regularizers import l1, l2, l1_l2
+from tensorflow.keras.optimizers import Adam, SGD, RMSprop
+from tensorflow.keras.callbacks import (
+    EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
+)
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score,
+    f1_score, confusion_matrix, classification_report
+)
+
+tf.keras.utils.set_random_seed(42)
+
+
+
+ann_layers = [
+    Input(shape=(10,)),
+    Dense(
+        units=64,
+        activation="relu",
+        use_bias=True,
+        kernel_initializer="he_normal",
+        bias_initializer="zeros",
+        kernel_regularizer=l2(0.001)
+    ),
+    BatchNormalization(momentum=0.99, epsilon=0.001),
+    Dropout(rate=0.2),
+    Dense(units=32, activation="relu"),
+    Dropout(rate=0.1),
+    Dense(units=1, activation="sigmoid")
+]
+
+
+
+adam = Adam(
+    learning_rate=0.001,
+    beta_1=0.9,
+    beta_2=0.999,
+    epsilon=1e-7
+)
+
+sgd = SGD(
+    learning_rate=0.01,
+    momentum=0.9,
+    nesterov=False
+)
+
+rmsprop = RMSprop(
+    learning_rate=0.001,
+    rho=0.9,
+    momentum=0.0,
+    epsilon=1e-7
+)
+
+
+
+binary_loss = "binary_crossentropy"
+multiclass_loss = "sparse_categorical_crossentropy"
+onehot_loss = "categorical_crossentropy"
+regression_loss = "mse"
+mae_loss = "mae"
+huber_loss = tf.keras.losses.Huber()
+
+
+early_stopping = EarlyStopping(
+    monitor="val_loss",
+    patience=5,
+    min_delta=0.001,
+    restore_best_weights=True
+)
+
+reduce_lr = ReduceLROnPlateau(
+    monitor="val_loss",
+    factor=0.5,
+    patience=3,
+    min_lr=1e-6
+)
+
+checkpoint = ModelCheckpoint(
+    filepath="best_model.keras",
+    monitor="val_loss",
+    save_best_only=True,
+    mode="min"
+)
+
+
+# Example binary-classification dataset
+X = np.random.randn(1000, 10).astype(np.float32)
+y = (X[:, 0] + X[:, 1] > 0).astype(np.float32)
+
+# Train/test split
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y,
+    test_size=0.2,
+    random_state=42,
+    stratify=y
+)
+
+# Fit scaler ONLY on training data
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train).astype(np.float32)
+X_test = scaler.transform(X_test).astype(np.float32)
+
+
+ann = Sequential([
+    Input(shape=(10,)),
+    Dense(
+        64,
+        activation="relu",
+        kernel_initializer="he_normal",
+        kernel_regularizer=l2(0.001)
+    ),
+    BatchNormalization(),
+    Dropout(0.2),
+    Dense(32, activation="relu"),
+    Dense(1, activation="sigmoid")
+], name="ANN")
+
+# compile(optimizer, loss, metrics)
+ann.compile(
+    optimizer=Adam(learning_rate=0.001),
+    loss="binary_crossentropy",
+    metrics=["accuracy"]
+)
+
+ann.summary()
+
+# fit(x, y, epochs, batch_size, validation_split, callbacks)
+ann_history = ann.fit(
+    X_train, y_train,
+    epochs=30,
+    batch_size=32,
+    validation_split=0.2,
+    callbacks=[early_stopping, reduce_lr],
+    verbose=1
+)
+
+# evaluate(x, y)
+ann_results = ann.evaluate(X_test, y_test, verbose=0)
+print("\nANN test loss and accuracy:", ann_results)
+
+# predict(x)
+ann_probabilities = ann.predict(X_test, verbose=0).ravel()
+ann_predictions = (ann_probabilities >= 0.5).astype(int)
+
+print("ANN Accuracy:", accuracy_score(y_test, ann_predictions))
+print("ANN Precision:", precision_score(y_test, ann_predictions))
+print("ANN Recall:", recall_score(y_test, ann_predictions))
+print("ANN F1-score:", f1_score(y_test, ann_predictions))
+print("ANN Confusion matrix:\n", confusion_matrix(y_test, ann_predictions))
+print("\nANN Classification report:\n",
+      classification_report(y_test, ann_predictions))
+
+
+
+(X_train_all, y_train_all), (X_test_cnn, y_test_cnn) = (
+    tf.keras.datasets.mnist.load_data()
+)
+
+# Normalize pixels to [0, 1] and add grayscale channel
+X_train_all = (
+    X_train_all.astype(np.float32) / 255.0
+)[..., np.newaxis]
+
+X_test_cnn = (
+    X_test_cnn.astype(np.float32) / 255.0
+)[..., np.newaxis]
+
+# Training/validation split
+X_train_cnn, X_val_cnn, y_train_cnn, y_val_cnn = train_test_split(
+    X_train_all, y_train_all,
+    test_size=0.1,
+    random_state=42,
+    stratify=y_train_all
+)
+
+# ============================================================
+# 9. BUILD CNN
+# ============================================================
+
+cnn = Sequential([
+    Input(shape=(28, 28, 1)),
+
+    # Image augmentation during training
+    RandomRotation(factor=0.05),
+    RandomTranslation(
+        height_factor=0.05,
+        width_factor=0.05
+    ),
+
+    # Convolution block 1
+    Conv2D(
+        filters=32,
+        kernel_size=(3, 3),
+        strides=(1, 1),
+        padding="same",
+        use_bias=False,
+        kernel_initializer="he_normal",
+        kernel_regularizer=l2(0.001),
+        name="conv1"
+    ),
+    BatchNormalization(),
+    Activation("relu"),
+    MaxPooling2D(pool_size=(2, 2)),
+    Dropout(0.2),
+
+    # Convolution block 2
+    Conv2D(
+        filters=64,
+        kernel_size=(3, 3),
+        strides=(1, 1),
+        padding="same",
+        activation="relu",
+        kernel_initializer="he_normal",
+        name="conv2"
+    ),
+    MaxPooling2D(pool_size=(2, 2)),
+    Dropout(0.2),
+
+    # Classifier
+    Flatten(),
+    Dense(64, activation="relu"),
+    Dropout(0.3),
+    Dense(10, activation="softmax")
+], name="CNN")
+
+cnn.compile(
+    optimizer=Adam(learning_rate=0.001),
+    loss="sparse_categorical_crossentropy",
+    metrics=["accuracy"]
+)
+
+cnn.summary()
+
+cnn_history = cnn.fit(
+    X_train_cnn, y_train_cnn,
+    epochs=5,
+    batch_size=64,
+    validation_data=(X_val_cnn, y_val_cnn),
+    callbacks=[
+        EarlyStopping(
+            monitor="val_loss",
+            patience=2,
+            restore_best_weights=True
+        ),
+        ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=0.5,
+            patience=1,
+            min_lr=1e-6
+        )
+    ],
+    verbose=1
+)
+
+# ============================================================
+# 10. CNN EVALUATION AND PREDICTION
+# ============================================================
+
+cnn_results = cnn.evaluate(X_test_cnn, y_test_cnn, verbose=0)
+print("\nCNN test loss and accuracy:", cnn_results)
+
+cnn_probabilities = cnn.predict(X_test_cnn, batch_size=256, verbose=0)
+cnn_predictions = np.argmax(cnn_probabilities, axis=1)
+
+print("CNN Accuracy:",
+      accuracy_score(y_test_cnn, cnn_predictions))
+print("\nCNN Classification report:\n",
+      classification_report(y_test_cnn, cnn_predictions))
+print("CNN Confusion matrix:\n",
+      confusion_matrix(y_test_cnn, cnn_predictions))
+
+print("\nExample CNN prediction:", cnn_predictions[0])
+print("Actual digit:", y_test_cnn[0])
+
+# ============================================================
+# 11. DISPLAY TRAINING CURVES
+# ============================================================
+
+import matplotlib.pyplot as plt
+
+# ANN loss
+plt.figure(figsize=(7, 4))
+plt.plot(ann_history.history["loss"], label="ANN training loss")
+plt.plot(ann_history.history["val_loss"], label="ANN validation loss")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.title("ANN Training and Validation Loss")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# CNN loss
+plt.figure(figsize=(7, 4))
+plt.plot(cnn_history.history["loss"], label="CNN training loss")
+plt.plot(cnn_history.history["val_loss"], label="CNN validation loss")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.title("CNN Training and Validation Loss")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# ============================================================
+# 12. QUICK PARAMETER REFERENCE
+# ============================================================
+
+print("""
+ANN IMPORTANT METHODS:
+Input(shape)
+Dense(units, activation, use_bias, kernel_initializer,
+      bias_initializer, kernel_regularizer)
+Dropout(rate)
+BatchNormalization(axis, momentum, epsilon)
+
+CNN IMPORTANT METHODS:
+Conv2D(filters, kernel_size, strides, padding, activation,
+       use_bias, dilation_rate, groups, kernel_initializer)
+MaxPooling2D(pool_size, strides, padding)
+AveragePooling2D(pool_size, strides, padding)
+Flatten()
+GlobalAveragePooling2D()
+RandomRotation(factor)
+RandomTranslation(height_factor, width_factor)
+
+MODEL METHODS:
+compile(optimizer, loss, metrics)
+fit(x, y, epochs, batch_size, validation_data, callbacks)
+evaluate(x, y)
+predict(x)
+
+OPTIMIZERS:
+Adam(learning_rate, beta_1, beta_2, epsilon)
+SGD(learning_rate, momentum, nesterov)
+RMSprop(learning_rate, rho, momentum, epsilon)
+
+CALLBACKS:
+EarlyStopping(monitor, patience, min_delta, restore_best_weights)
+ReduceLROnPlateau(monitor, factor, patience, min_lr)
+ModelCheckpoint(filepath, monitor, save_best_only, mode)
+""")
